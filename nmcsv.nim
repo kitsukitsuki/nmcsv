@@ -150,17 +150,14 @@ proc raiseInvalidCsvError(msg: string) =
 when isMainModule:
   var seq2dCsv: seq[seq[string]] = @[]
   block:
-    var fs = newFileStream("tmp.csv", fmRead)
+    var fs = newFileStream("test.csv", fmRead)
     if not isNil(fs):
       var cr: CsvReader
       cr.reader(fs)
-      echo cr.readRow()
-      echo cr.row
       while cr.readRow():
-        echo cr.row
         seq2dCsv &= cr.row
       defer: cr.close()
     else:
       echo "file is nil"
 
-    echo seq2dCsv
+    # echo seq2dCsv
