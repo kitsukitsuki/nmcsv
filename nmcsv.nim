@@ -18,7 +18,7 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             delimiter=',', quotechar='"', escapechar='\0',
             skipInitialSpace=false)
 proc readRow*(cr: var CsvReader, columns=0): bool
-proc parseField(cr: var CsvReader, s: var string)
+proc parseField(cr: var CsvReader, s: var string, pos: var int)
 proc close*(cr: var CsvReader)
 
 proc error(cr: CsvReader, msg: string)
@@ -55,7 +55,7 @@ proc readRow*(cr: var CsvReader, columns=0): bool =
       setLen(cr.row, col+1)
       cr.maxLen = col+1
 
-    parseField(cr, cr.row[col])
+    parseField(cr, cr.row[col], cr.bufpos)
     pos = cr.bufpos
     inc(col)
     if buf[pos] == delim:
@@ -83,10 +83,9 @@ proc readRow*(cr: var CsvReader, columns=0): bool =
     error(cr, "error")
 
 
-proc parseField(cr: var CsvReader, s: var string) =
+proc parseField(cr: var CsvReader, s: var string, pos: var int) =
   var
     buf = cr.buf
-    pos = cr.bufpos
   let
     quote = cr.quotechar
     esc = cr.escapechar
@@ -107,7 +106,6 @@ proc parseField(cr: var CsvReader, s: var string) =
     while true:
       let c = buf[pos]
       if c == '\0':
-        cr.bufpos = pos
         # Error
         break
       elif c == quote:
@@ -140,7 +138,6 @@ proc parseField(cr: var CsvReader, s: var string) =
       if c in {'\c', '\l', '\0'}: break
       add(s, c)
       inc(pos)
-  cr.bufpos = pos
 
 proc close*(cr: var CsvReader) =
   lb.close(cr)
