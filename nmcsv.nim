@@ -3,6 +3,11 @@ import
   streams as streams
 
 type
+  ParserState = enum
+    startRecord, startField, escapedChar, inField,
+    inQuotedField, escapeInQuotedField, quoteInQuotedField,
+    eatCrnl, afterEscapedCrnl
+
   CsvRow = seq[string]
   CsvReader* = object of lb.BaseLexer  ## csv reader object
     row*: CsvRow
@@ -10,8 +15,12 @@ type
     delimiter, quotechar, escapechar: char
     skipInitSpace: bool
     maxLen: int
+    status: ParserState
 
   CsvError = object of IOError
+
+
+
 
 # Forward declarations
 proc reader*(cr: var CsvReader, fileStream: streams.Stream,
@@ -38,6 +47,8 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
   cr.skipInitSpace = skipInitialSpace
   cr.row = @[]
   cr.maxLen = 0
+
+  cr.status = startRecord
 
 proc readRow*(cr: var CsvReader, columns=0): bool =
   var
@@ -122,11 +133,9 @@ proc parseField(cr: var CsvReader, s: var string, pos: var int) =
         case c:
           of '\c':
             pos = lb.handleCR(cr, pos)
-            buf = cr.buf
             add(s, "\n")
           of '\l':
             pos = lb.handleLF(cr, pos)
-            buf = cr.buf
             add(s, "\n")
           else:
             add(s, c)
@@ -155,7 +164,7 @@ proc raiseInvalidCsvError(msg: string) =
 when isMainModule:
   var seq2dCsv: seq[seq[string]] = @[]
   block:
-    var fs = newFileStream("test.csv", fmRead)
+    var fs = newFileStream("tmp.csv", fmRead)
     if not isNil(fs):
       var cr: CsvReader
       cr.reader(fs)
@@ -165,4 +174,4 @@ when isMainModule:
     else:
       echo "file is nil"
 
-    # echo seq2dCsv
+    echo seq2dCsv
