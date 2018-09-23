@@ -9,6 +9,7 @@ type
     pathFile: string
     delimiter, quotechar, escapechar: char
     skipInitSpace: bool
+    maxLen: int
 
   CsvError = object of IOError
 
@@ -36,6 +37,7 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
   cr.escapechar = escapechar
   cr.skipInitSpace = skipInitialSpace
   cr.row = @[]
+  cr.maxLen = 0
 
 proc readRow*(cr: var CsvReader, columns=0): bool =
   var
@@ -43,15 +45,16 @@ proc readRow*(cr: var CsvReader, columns=0): bool =
     pos = cr.bufpos
     col = 0
   let
+    maxLen = cr.maxLen
     oldpos = cr.bufpos
     esc = cr.escapechar
     delim = cr.delimiter
 
   while buf[pos] != '\0':
-    let oldlen = cr.row.len
-    if oldlen < col+1:
+    if maxLen < col+1:  # This row is longest; update len of row and maxLen
       setLen(cr.row, col+1)
-      cr.row[col] = ""
+      cr.maxLen = col+1
+
     parseField(cr, cr.row[col])
     pos = cr.bufpos
     inc(col)
@@ -93,7 +96,12 @@ proc parseField(cr: var CsvReader, s: var string) =
     while buf[pos] in {' ', '\t'}:
       inc(pos)
 
-  setLen(s, 0)
+  # init string or reuse memory
+  if s.isNil:
+    s = newString(0)
+  else:
+    setLen(s, 0)
+
   if buf[pos] == quote and quote != '\0':
     inc(pos)
     while true:
