@@ -4,9 +4,9 @@ import
 
 type
   ParserState = enum
-    startRecord, startField, escapedChar, inField,
+    beforeField, startField, escapedChar, inField, afterField
     inQuotedField, escapeInQuotedField, quoteInQuotedField,
-    eatCrnl, afterEscapedCrnl
+    afterEscapedCrnl, endParser
 
   CsvRow = seq[string]
   CsvReader* = object of lb.BaseLexer  ## csv reader object
@@ -15,7 +15,7 @@ type
     delimiter, quotechar, escapechar: char
     skipInitSpace: bool
     maxLen: int
-    status: ParserState
+    state: ParserState
 
   CsvError = object of IOError
 
@@ -27,9 +27,9 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             delimiter=',', quotechar='"', escapechar='\0',
             skipInitialSpace=false)
 proc readRow*(cr: var CsvReader, columns=0): bool
-proc parseField(cr: var CsvReader, s: var string, pos: var int)
+proc parseField(cr: var CsvReader, s: var string, pos: var int,
+                state: var ParserState)
 proc close*(cr: var CsvReader)
-
 proc error(cr: CsvReader, msg: string)
 proc raiseInvalidCsvError(msg: string)
 
@@ -48,10 +48,11 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
   cr.row = @[]
   cr.maxLen = 0
 
-  cr.status = startRecord
+  cr.state = beforeField
 
 proc readRow*(cr: var CsvReader, columns=0): bool =
   var
+    state = cr.state
     buf = cr.buf
     pos = cr.bufpos
     col = 0
@@ -61,40 +62,37 @@ proc readRow*(cr: var CsvReader, columns=0): bool =
     esc = cr.escapechar
     delim = cr.delimiter
 
-  while buf[pos] != '\0':
+  setLen(cr.row, maxLen)
+  while cr.state != endParser:
     if maxLen < col+1:  # This row is longest; update len of row and maxLen
       setLen(cr.row, col+1)
       cr.maxLen = col+1
 
-    parseField(cr, cr.row[col], cr.bufpos)
+    parseField(cr, cr.row[col], cr.bufpos, cr.state)
     pos = cr.bufpos
     inc(col)
-    if buf[pos] == delim:
-      inc(cr.bufpos)
-    else:
-      case buf[pos]
-      of '\c', '\l':
-        while true:
-          case buf[cr.bufpos]
-          of '\c':
-            cr.bufpos = lb.handleCR(cr, pos)
-          of '\l':
-            cr.bufpos = lb.handleLF(cr, pos)
-          else:
-            break
-      of '\0':
-        discard
-      else:
-        #Error
-        error(cr, delim & " error")
-      break
+
   setLen(cr.row, col)
-  result = col > 0
+  cr.state = beforeField
+  result = (nil notin cr.row) and (col > 0)
+
   if result and col != columns and columns > 0:
     error(cr, "error")
 
 
-proc parseField(cr: var CsvReader, s: var string, pos: var int) =
+proc handleCrlf(cr: var CsvReader, pos: var int, c: char) =
+  case c:
+    of '\c':
+      pos = lb.handleCR(cr, pos)
+    of '\l':
+      pos = lb.handleLF(cr, pos)
+    else:
+      # error
+      discard
+
+
+proc parseField(cr: var CsvReader, s: var string, pos: var int,
+                state: var ParserState) =
   var
     buf = cr.buf
   let
@@ -102,51 +100,108 @@ proc parseField(cr: var CsvReader, s: var string, pos: var int) =
     esc = cr.escapechar
     delim = cr.delimiter
 
-  if cr.skipInitSpace:
-    while buf[pos] in {' ', '\t'}:
-      inc(pos)
-
   # init string or reuse memory
   if s.isNil:
     s = newString(0)
   else:
     setLen(s, 0)
 
-  if buf[pos] == quote and quote != '\0':
-    inc(pos)
-    while true:
-      let c = buf[pos]
-      if c == '\0':
-        # Error
-        break
-      elif c == quote:
-        if esc == '\0' and buf[pos+1] == quote:
-          add(s, quote)
-          inc(pos, 2)
-        else:
+  while true:
+    let
+      c = buf[pos]
+
+    case state:
+      of beforeField:
+        # before parsing field
+        if c == '\0':
+          # empty line; return nil and end parser
+          s = nil
           inc(pos)
+          state = endParser
           break
-      elif c == esc:
-        add(s, buf[pos+1])
-        inc(pos, 2)
-      else:
-        case c:
-          of '\c':
-            pos = lb.handleCR(cr, pos)
-            add(s, "\n")
-          of '\l':
-            pos = lb.handleLF(cr, pos)
-            add(s, "\n")
-          else:
-            add(s, c)
+        elif c in {'\c', '\l'}:
+          # new line; handle CR and LF and end parser
+          handleCrlf(cr, pos, c)
+          state = endParser
+          break
+        elif c == delim:
+          state = afterField
+        elif c == quote:
+          # quotechar; inc pos and get in quoted field
+          inc(pos)
+          state = inQuotedField
+        elif c == ' ':
+          # blank; skip or get in field
+          if cr.skipInitSpace:
             inc(pos)
-  else:
-    while true:
-      let c = buf[pos]
-      if c == delim: break
-      if c in {'\c', '\l', '\0'}: break
-      add(s, c)
-      inc(pos)
+          else:
+            state = inField
+        else:
+          # normal character; get in field
+          state = inField
+      of inQuotedField:
+        # quoted field
+        if c == '\0' and esc != '\0':
+          # end of line and end parser
+          inc(pos)
+          state = endParser
+          break
+        elif c == esc:
+          add(s, c)
+          inc(pos)
+        elif c in {'\c', '\l'}:
+          handleCrlf(cr, pos, c)
+          add(s, "\n")
+        elif c == quote:
+          # quote character
+          if buf[pos+1] == quote:
+            add(s, c)
+            inc(pos, 1)
+          else:
+            inc(pos, 1)
+            state = afterField
+        else:
+          # normal character
+          add(s, c)
+          inc(pos)
+      of inField:
+        if c == '\0':
+          # end of line and end parser
+          inc(pos)
+          state = endParser
+          break
+        elif c == esc:
+          add(s, c)
+          inc(pos)
+        elif c in {'\c', '\l'}:
+          handleCrlf(cr, pos, c)
+          state = endParser
+          break
+        elif c == delim:
+          state = afterField
+        else:
+          # normal character
+          add(s, c)
+          inc(pos)
+      of afterField:
+        if c == '\0':
+          inc(pos)
+          state = endParser
+          break
+        elif c in {'\c', '\l'}:
+          handleCrlf(cr, pos, c)
+          state = endParser
+          break
+        elif c == delim:
+          # delimiter; go to next field
+          inc(pos)
+          state = beforeField
+          break
+        else:
+          state = beforeField
+          # break
+      else:
+        discard
 
 proc close*(cr: var CsvReader) =
   lb.close(cr)
@@ -164,7 +219,7 @@ proc raiseInvalidCsvError(msg: string) =
 when isMainModule:
   var seq2dCsv: seq[seq[string]] = @[]
   block:
-    var fs = newFileStream("tmp.csv", fmRead)
+    var fs = newFileStream("test.csv", fmRead)
     if not isNil(fs):
       var cr: CsvReader
       cr.reader(fs)
@@ -174,4 +229,4 @@ when isMainModule:
     else:
       echo "file is nil"
 
-    echo seq2dCsv
+    # echo seq2dCsv
