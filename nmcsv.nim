@@ -154,12 +154,12 @@ proc parseField(cr: var CsvReader, s: var string, pos: var int,
           add(s, "\n")
         elif c == quote:
           # quote character
-          if buf[pos+1] == quote:
-            add(s, c)
-            inc(pos, 1)
-          else:
-            inc(pos, 1)
+          if buf[pos+1] ==  delim or buf[pos+1] in {'\0', '\c', '\l'}:
+            inc(pos)
             state = afterField
+          else:
+            add(s, c)
+            inc(pos)
         else:
           # normal character
           add(s, c)
@@ -219,7 +219,7 @@ proc raiseInvalidCsvError(msg: string) =
 when isMainModule:
   var seq2dCsv: seq[seq[string]] = @[]
   block:
-    var fs = newFileStream("test.csv", fmRead)
+    var fs = newFileStream("tmp.csv", fmRead)
     if not isNil(fs):
       var cr: CsvReader
       cr.reader(fs)
@@ -229,4 +229,4 @@ when isMainModule:
     else:
       echo "file is nil"
 
-    # echo seq2dCsv
+    echo seq2dCsv
