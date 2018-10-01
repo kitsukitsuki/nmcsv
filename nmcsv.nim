@@ -29,7 +29,8 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             delimiter=',', quotechar='"', escapechar='\0',
             skipInitialSpace=false)
 proc readRow*(cr: var CsvReader, columns=0): bool
-proc parseField(lx: var CsvLexer, cr: var CsvReader, s: var string,
+
+proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
                 state: var ParserState)
 proc close*(cr: var CsvReader)
 proc error(cr: CsvReader, msg: string)
@@ -70,7 +71,7 @@ proc readRow*(cr: var CsvReader, columns=0): bool {.discardable.} =
       setLen(cr.row, col+1)
       cr.maxLen = col+1
 
-    parseField(cr.lexer, cr, cr.row[col], cr.state)
+    parseField(cr.lexer, cr, cr.row[col], cr.lexer.bufpos, cr.state)
     pos = cr.lexer.bufpos
     inc(col)
 
@@ -92,8 +93,6 @@ proc toSeq*(cr: var CsvReader): seq[CsvRow] =
   while readRow(cr):
     result.add(cr.row)
 
-
-
 proc handleCrlf(lx: var CsvLexer, pos: var int, c: char) =
   case c:
     of '\c':
@@ -105,11 +104,10 @@ proc handleCrlf(lx: var CsvLexer, pos: var int, c: char) =
       discard
 
 
-proc parseField(lx: var CsvLexer, cr: var CsvReader, s: var string,
+proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
                 state: var ParserState) =
   var
     buf = lx.buf
-    pos = lx.bufpos
   let
     quote = cr.quotechar
     esc = cr.escapechar
@@ -260,6 +258,5 @@ when isMainModule:
           echo "file is nil"
     else:
       discard
-
 
   # echo seq2dCsv
