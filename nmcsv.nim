@@ -10,12 +10,14 @@ type
 
   CsvRow = seq[string]
   CsvLexer = object of lb.BaseLexer
+  CsvParams = object
+    delimiter, quotechar, escapechar: char
+    skipInitSpace: bool
   CsvReader* = object  ## csv reader object
     row*: CsvRow
     lexer: CsvLexer
+    params: CsvParams
     pathFile: string
-    delimiter, quotechar, escapechar: char
-    skipInitSpace: bool
     maxLen: int
     state: ParserState
 
@@ -30,8 +32,8 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             skipInitialSpace=false)
 proc readRow*(cr: var CsvReader, columns=0): bool
 
-proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
-                state: var ParserState)
+proc parseField(s: var string, pos: var int, lexer: var CsvLexer,
+                state: var ParserState, params: CsvParams)
 proc close*(cr: var CsvReader)
 proc error(cr: CsvReader, msg: string)
 proc raiseInvalidCsvError(msg: string)
@@ -44,43 +46,39 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             skipInitialSpace=false) =
   lb.open(cr.lexer, fileStream)
 
-  cr.delimiter = delimiter
-  cr.quotechar = quotechar
-  cr.escapechar = escapechar
-  cr.skipInitSpace = skipInitialSpace
+  cr.params.delimiter = delimiter
+  cr.params.quotechar = quotechar
+  cr.params.escapechar = escapechar
+  cr.params.skipInitSpace = skipInitialSpace
   cr.row = @[]
   cr.maxLen = 0
 
   cr.state = beforeField
 
-proc readRow*(cr: var CsvReader, columns=0): bool {.discardable.} =
+proc parseRow(row: var CsvRow, state: var ParserState,
+              params: CsvParams, lexer: var CsvLexer): bool =
   var
-    state = cr.state
-    buf = cr.lexer.buf
-    pos = cr.lexer.bufpos
+    buf = lexer.buf
+    pos = lexer.bufpos
     col = 0
-  let
-    maxLen = cr.maxLen
-    oldpos = cr.lexer.bufpos
-    esc = cr.escapechar
-    delim = cr.delimiter
+    maxLen = 0
 
-  setLen(cr.row, maxLen)
-  while cr.state != endParser:
+  setLen(row, maxLen)
+  while state != endParser:
     if maxLen < col+1:  # This row is longest; update len of row and maxLen
-      setLen(cr.row, col+1)
-      cr.maxLen = col+1
+      maxLen = col + 1
+      setLen(row, maxLen)
 
-    parseField(cr.lexer, cr, cr.row[col], cr.lexer.bufpos, cr.state)
-    pos = cr.lexer.bufpos
+    parseField(row[col], lexer.bufpos, lexer, state, params)
+    pos = lexer.bufpos
     inc(col)
 
-  setLen(cr.row, col)
-  cr.state = beforeField
-  result = (nil notin cr.row) and (col > 0)
+  setLen(row, col)
+  state = beforeField
+  result = (nil notin row) and (col > 0)
 
-  if result and col != columns and columns > 0:
-    error(cr, "error")
+proc readRow*(cr: var CsvReader, columns=0): bool {.discardable.} =
+  result = parseRow(cr.row, cr.state, cr.params, cr.lexer)
 
 proc next*(cr: var CsvReader, columns=0): CsvRow =
   if readRow(cr):
@@ -104,14 +102,15 @@ proc handleCrlf(lx: var CsvLexer, pos: var int, c: char) =
       discard
 
 
-proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
-                state: var ParserState) =
+proc parseField(s: var string, pos: var int, lexer: var CsvLexer,
+                state: var ParserState, params: CsvParams) =
   var
-    buf = lx.buf
+    buf = lexer.buf
   let
-    quote = cr.quotechar
-    esc = cr.escapechar
-    delim = cr.delimiter
+    quote = params.quotechar
+    esc = params.escapechar
+    delim = params.delimiter
+    skip = params.skipInitSpace
 
   # init string or reuse memory
   if s.isNil:
@@ -134,7 +133,7 @@ proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
           break
         elif c in {'\c', '\l'}:
           # new line; handle CR and LF and end parser
-          handleCrlf(lx, pos, c)
+          handleCrlf(lexer, pos, c)
           state = endParser
           break
         elif c == delim:
@@ -145,7 +144,7 @@ proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
           state = inQuotedField
         elif c == ' ':
           # blank; skip or get in field
-          if cr.skipInitSpace:
+          if skip:
             inc(pos)
           else:
             state = inField
@@ -163,7 +162,7 @@ proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
           add(s, c)
           inc(pos)
         elif c in {'\c', '\l'}:
-          handleCrlf(lx, pos, c)
+          handleCrlf(lexer, pos, c)
           add(s, "\n")
         elif c == quote:
           # quote character
@@ -187,7 +186,7 @@ proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
           add(s, c)
           inc(pos)
         elif c in {'\c', '\l'}:
-          handleCrlf(lx, pos, c)
+          handleCrlf(lexer, pos, c)
           state = endParser
           break
         elif c == delim:
@@ -202,7 +201,7 @@ proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
           state = endParser
           break
         elif c in {'\c', '\l'}:
-          handleCrlf(lx, pos, c)
+          handleCrlf(lexer, pos, c)
           state = endParser
           break
         elif c == delim:
