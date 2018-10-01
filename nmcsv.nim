@@ -9,8 +9,10 @@ type
     afterEscapedCrnl, endParser
 
   CsvRow = seq[string]
-  CsvReader* = object of lb.BaseLexer  ## csv reader object
+  CsvLexer = object of lb.BaseLexer
+  CsvReader* = object  ## csv reader object
     row*: CsvRow
+    lexer: CsvLexer
     pathFile: string
     delimiter, quotechar, escapechar: char
     skipInitSpace: bool
@@ -27,7 +29,7 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             delimiter=',', quotechar='"', escapechar='\0',
             skipInitialSpace=false)
 proc readRow*(cr: var CsvReader, columns=0): bool
-proc parseField(cr: var CsvReader, s: var string, pos: var int,
+proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
                 state: var ParserState)
 proc close*(cr: var CsvReader)
 proc error(cr: CsvReader, msg: string)
@@ -39,7 +41,7 @@ proc raiseInvalidCsvError(msg: string)
 proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             delimiter=',', quotechar='"', escapechar='\0',
             skipInitialSpace=false) =
-  lb.open(cr, fileStream)
+  lb.open(cr.lexer, fileStream)
 
   cr.delimiter = delimiter
   cr.quotechar = quotechar
@@ -53,12 +55,12 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
 proc readRow*(cr: var CsvReader, columns=0): bool =
   var
     state = cr.state
-    buf = cr.buf
-    pos = cr.bufpos
+    buf = cr.lexer.buf
+    pos = cr.lexer.bufpos
     col = 0
   let
     maxLen = cr.maxLen
-    oldpos = cr.bufpos
+    oldpos = cr.lexer.bufpos
     esc = cr.escapechar
     delim = cr.delimiter
 
@@ -68,8 +70,8 @@ proc readRow*(cr: var CsvReader, columns=0): bool =
       setLen(cr.row, col+1)
       cr.maxLen = col+1
 
-    parseField(cr, cr.row[col], cr.bufpos, cr.state)
-    pos = cr.bufpos
+    parseField(cr.lexer, cr, cr.row[col], cr.lexer.bufpos, cr.state)
+    pos = cr.lexer.bufpos
     inc(col)
 
   setLen(cr.row, col)
@@ -80,21 +82,21 @@ proc readRow*(cr: var CsvReader, columns=0): bool =
     error(cr, "error")
 
 
-proc handleCrlf(cr: var CsvReader, pos: var int, c: char) =
+proc handleCrlf(lx: var CsvLexer, pos: var int, c: char) =
   case c:
     of '\c':
-      pos = lb.handleCR(cr, pos)
+      pos = lb.handleCR(lx, pos)
     of '\l':
-      pos = lb.handleLF(cr, pos)
+      pos = lb.handleLF(lx, pos)
     else:
       # error
       discard
 
 
-proc parseField(cr: var CsvReader, s: var string, pos: var int,
+proc parseField(lx: var CsvLexer, cr: CsvReader, s: var string, pos: var int,
                 state: var ParserState) =
   var
-    buf = cr.buf
+    buf = lx.buf
   let
     quote = cr.quotechar
     esc = cr.escapechar
@@ -121,7 +123,7 @@ proc parseField(cr: var CsvReader, s: var string, pos: var int,
           break
         elif c in {'\c', '\l'}:
           # new line; handle CR and LF and end parser
-          handleCrlf(cr, pos, c)
+          handleCrlf(lx, pos, c)
           state = endParser
           break
         elif c == delim:
@@ -150,7 +152,7 @@ proc parseField(cr: var CsvReader, s: var string, pos: var int,
           add(s, c)
           inc(pos)
         elif c in {'\c', '\l'}:
-          handleCrlf(cr, pos, c)
+          handleCrlf(lx, pos, c)
           add(s, "\n")
         elif c == quote:
           # quote character
@@ -174,7 +176,7 @@ proc parseField(cr: var CsvReader, s: var string, pos: var int,
           add(s, c)
           inc(pos)
         elif c in {'\c', '\l'}:
-          handleCrlf(cr, pos, c)
+          handleCrlf(lx, pos, c)
           state = endParser
           break
         elif c == delim:
@@ -189,7 +191,7 @@ proc parseField(cr: var CsvReader, s: var string, pos: var int,
           state = endParser
           break
         elif c in {'\c', '\l'}:
-          handleCrlf(cr, pos, c)
+          handleCrlf(lx, pos, c)
           state = endParser
           break
         elif c == delim:
@@ -204,7 +206,7 @@ proc parseField(cr: var CsvReader, s: var string, pos: var int,
         discard
 
 proc close*(cr: var CsvReader) =
-  lb.close(cr)
+  lb.close(cr.lexer)
 
 proc error(cr: CsvReader, msg: string) =
   raiseInvalidCsvError(msg)
@@ -217,16 +219,25 @@ proc raiseInvalidCsvError(msg: string) =
 
 
 when isMainModule:
+  let pathFile = "test.csv"
   var seq2dCsv: seq[seq[string]] = @[]
-  block:
-    var fs = newFileStream("tmp.csv", fmRead)
-    if not isNil(fs):
-      var cr: CsvReader
-      cr.reader(fs)
-      while cr.readRow():
-        seq2dCsv &= cr.row
-      defer: cr.close()
-    else:
-      echo "file is nil"
+  var debugType = 1
 
-    echo seq2dCsv
+  case debugtype:
+    of 1:
+      block:
+        var fs = newFileStream(pathFile, fmRead)
+        if not isNil(fs):
+          var cr: CsvReader
+          cr.reader(fs)
+          while cr.readRow():
+            seq2dCsv.add(cr.row)
+          defer: cr.close()
+        else:
+          echo "file is nil"
+
+
+    else:
+      discard
+
+  # echo seq2dCsv
