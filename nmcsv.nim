@@ -26,7 +26,7 @@ type
 proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             delimiter=',', quotechar='"', escapechar='\0',
             skipInitialSpace=false)
-proc readRow*(cr: var CsvReader, columns=0): bool
+proc readRow*(cr: var CsvReader, columns=0): CsvRow
 proc parseField(cr: var CsvReader, s: var string, pos: var int,
                 state: var ParserState)
 proc close*(cr: var CsvReader)
@@ -50,7 +50,7 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
 
   cr.state = beforeField
 
-proc readRow*(cr: var CsvReader, columns=0): bool =
+proc next*(cr: var CsvReader, columns=0): bool {.discardable.} =
   var
     state = cr.state
     buf = cr.buf
@@ -78,6 +78,18 @@ proc readRow*(cr: var CsvReader, columns=0): bool =
 
   if result and col != columns and columns > 0:
     error(cr, "error")
+
+proc readRow*(cr: var CsvReader, columns=0): CsvRow =
+  if next(cr):
+    result = cr.row
+  else:
+    result = @[]
+
+proc readRows*(cr: var CsvReader): seq[CsvRow] =
+  result = @[]
+  while next(cr):
+    result.add(cr.row)
+
 
 
 proc handleCrlf(cr: var CsvReader, pos: var int, c: char) =
@@ -217,16 +229,23 @@ proc raiseInvalidCsvError(msg: string) =
 
 
 when isMainModule:
+  let pathFile = "test.csv"
   var seq2dCsv: seq[seq[string]] = @[]
-  block:
-    var fs = newFileStream("tmp.csv", fmRead)
-    if not isNil(fs):
-      var cr: CsvReader
-      cr.reader(fs)
-      while cr.readRow():
-        seq2dCsv &= cr.row
-      defer: cr.close()
-    else:
-      echo "file is nil"
+  var debugType = 1
 
-    echo seq2dCsv
+  case debugtype:
+    of 1:
+      block:
+        var fs = newFileStream(pathFile, fmRead)
+        if not isNil(fs):
+          var cr: CsvReader
+          cr.reader(fs)
+          seq2dCsv = cr.readRows
+          defer: cr.close()
+        else:
+          echo "file is nil"
+    else:
+      discard
+
+
+  # echo seq2dCsv
