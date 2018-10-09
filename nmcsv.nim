@@ -1,6 +1,8 @@
 import
   lexbase as lb,
-  streams as streams
+  streams as streams,
+  strutils as strutils,
+  os as os
 
 type
   ParserState = enum
@@ -17,6 +19,7 @@ type
     row*: CsvRow
     lexer: CsvLexer
     params: CsvParams
+    col: int
     pathFile: string
     maxLen: int
     state: ParserState
@@ -29,11 +32,11 @@ type
 # Forward declarations
 proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             delimiter=',', quotechar='"', escapechar='\0',
-            skipInitialSpace=false)
-proc readRow*(cr: var CsvReader, columns=0): bool
+            skipInitialSpace=false, bufLen=8192)
+proc readRow*(cr: var CsvReader): bool
 
-proc parseField(s: var string, pos: var int, lexer: var CsvLexer,
-                state: var ParserState, params: CsvParams)
+proc parseField(s: var string, lexer: var CsvLexer,
+                state: var ParserState, params: CsvParams) {.inline.}
 proc close*(cr: var CsvReader)
 proc error(cr: CsvReader, msg: string)
 proc raiseInvalidCsvError(msg: string)
@@ -43,8 +46,8 @@ proc raiseInvalidCsvError(msg: string)
 ###
 proc reader*(cr: var CsvReader, fileStream: streams.Stream,
             delimiter=',', quotechar='"', escapechar='\0',
-            skipInitialSpace=false) =
-  lb.open(cr.lexer, fileStream)
+            skipInitialSpace=false, bufLen=8192) =
+  lb.open(cr.lexer, fileStream, bufLen)
 
   cr.params.delimiter = delimiter
   cr.params.quotechar = quotechar
@@ -55,30 +58,33 @@ proc reader*(cr: var CsvReader, fileStream: streams.Stream,
 
   cr.state = beforeField
 
-proc parseRow(row: var CsvRow, state: var ParserState,
-              params: CsvParams, lexer: var CsvLexer): bool =
+proc parseRow(row: var CsvRow, col: var int, state: var ParserState,
+              params: CsvParams, maxLen: var int,
+              lexer: var CsvLexer) {.inline.} =
   var
     buf = lexer.buf
     pos = lexer.bufpos
-    col = 0
-    maxLen = 0
 
+  col = 0
   setLen(row, maxLen)
   while state != endParser:
     if maxLen < col+1:  # This row is longest; update len of row and maxLen
       maxLen = col + 1
       setLen(row, maxLen)
 
-    parseField(row[col], lexer.bufpos, lexer, state, params)
+    parseField(row[col], lexer, state, params)
     pos = lexer.bufpos
     inc(col)
 
   setLen(row, col)
   state = beforeField
-  result = (nil notin row) and (col > 0)
 
-proc readRow*(cr: var CsvReader, columns=0): bool {.discardable.} =
-  result = parseRow(cr.row, cr.state, cr.params, cr.lexer)
+  lexer.bufpos = pos
+
+proc readRow*(cr: var CsvReader): bool {.discardable.} =
+  parseRow(cr.row, cr.col, cr.state, cr.params, cr.maxLen, cr.lexer)
+
+  result = (nil notin cr.row) and (cr.col > 0)
 
 proc next*(cr: var CsvReader, columns=0): CsvRow =
   if readRow(cr):
@@ -86,10 +92,36 @@ proc next*(cr: var CsvReader, columns=0): CsvRow =
   else:
     result = @[]
 
-proc toSeq*(cr: var CsvReader): seq[CsvRow] =
+proc toSeq*(pathFile: string): seq[CsvRow] =
   result = @[]
-  while readRow(cr):
-    result.add(cr.row)
+
+  # echo os.getFileSize(pathFile)
+  var fs = newFileStream(pathFile, fmRead)
+  if not isNil(fs):
+    var cr: CsvReader
+    let bufLen = 8192# int(os.getFileSize(pathFile))
+    cr.reader(fs, bufLen=bufLen)
+
+    var
+      i = 0
+      line = strutils.countLines($cr.lexer.buf)
+    setLen(result, line-1)
+    while true:
+      parseRow(cr.row, cr.col, cr.state, cr.params, cr.maxLen, cr.lexer)
+      if (nil notin cr.row) and (cr.col > 0):
+        result[i] = cr.row
+
+        inc(i)
+        if line <= i + 1:
+          line += strutils.countLines($cr.lexer.buf)
+          setLen(result, line-1)
+      else:
+        break
+    setLen(result, i)
+    cr.close()
+
+  else:
+    echo "file is nil"
 
 proc handleCrlf(lx: var CsvLexer, pos: var int, c: char) =
   case c:
@@ -102,10 +134,11 @@ proc handleCrlf(lx: var CsvLexer, pos: var int, c: char) =
       discard
 
 
-proc parseField(s: var string, pos: var int, lexer: var CsvLexer,
-                state: var ParserState, params: CsvParams) =
+proc parseField(s: var string, lexer: var CsvLexer,
+                state: var ParserState, params: CsvParams) {.inline.} =
   var
     buf = lexer.buf
+    pos = lexer.bufpos
   let
     quote = params.quotechar
     esc = params.escapechar
@@ -214,6 +247,7 @@ proc parseField(s: var string, pos: var int, lexer: var CsvLexer,
           # break
       else:
         discard
+  lexer.bufpos = pos
 
 proc close*(cr: var CsvReader) =
   lb.close(cr.lexer)
@@ -231,7 +265,7 @@ proc raiseInvalidCsvError(msg: string) =
 when isMainModule:
   let pathFile = "test.csv"
   var seq2dCsv: seq[seq[string]] = @[]
-  var debugType = 2
+  var debugType = 1
 
   case debugtype:
     of 1:
@@ -240,21 +274,15 @@ when isMainModule:
         if not isNil(fs):
           var cr: CsvReader
           cr.reader(fs)
+
           while readRow(cr):
             seq2dCsv.add(cr.row)
+
           defer: cr.close()
         else:
           echo "file is nil"
     of 2:
-      block:
-        var fs = newFileStream(pathFile, fmRead)
-        if not isNil(fs):
-          var cr: CsvReader
-          cr.reader(fs)
-          seq2dCsv = cr.toSeq()
-          defer: cr.close()
-        else:
-          echo "file is nil"
+      seq2dCsv = toSeq(pathFile)
     else:
       discard
 
