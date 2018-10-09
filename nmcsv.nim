@@ -99,25 +99,14 @@ proc toSeq*(pathFile: string): seq[CsvRow] =
   var fs = newFileStream(pathFile, fmRead)
   if not isNil(fs):
     var cr: CsvReader
-    let bufLen = 8192# int(os.getFileSize(pathFile))
-    cr.reader(fs, bufLen=bufLen)
+    cr.reader(fs)
 
-    var
-      i = 0
-      line = strutils.countLines($cr.lexer.buf)
-    setLen(result, line-1)
     while true:
       parseRow(cr.row, cr.col, cr.state, cr.params, cr.maxLen, cr.lexer)
       if (nil notin cr.row) and (cr.col > 0):
-        result[i] = cr.row
-
-        inc(i)
-        if line <= i + 1:
-          line += strutils.countLines($cr.lexer.buf)
-          setLen(result, line-1)
+        result.add(cr.row)
       else:
         break
-    setLen(result, i)
     cr.close()
 
   else:
