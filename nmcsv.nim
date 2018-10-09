@@ -265,7 +265,7 @@ proc raiseInvalidCsvError(msg: string) =
 when isMainModule:
   let pathFile = "test.csv"
   var seq2dCsv: seq[seq[string]] = @[]
-  var debugType = 1
+  var debugType = 2
 
   case debugtype:
     of 1:
